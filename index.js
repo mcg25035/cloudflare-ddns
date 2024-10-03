@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const axios = require('axios');
 const express = require('express');
@@ -9,7 +8,7 @@ const path = require('path');
 const app = express();
 app.use(bodyParser.json());
 
-const { CLOUDFLARE_API_TOKEN, CHECK_INTERVAL = 300, PORT = 3000 } = process.env;
+const { CLOUDFLARE_API_TOKEN, CHECK_INTERVAL = 300, PORT = 3000, ADDR = '0.0.0.0' } = process.env;
 const DOMAINS_FILE = 'domains.json';
 const IP_FILE = 'last_ip.txt';
 
@@ -40,7 +39,7 @@ if (fs.existsSync(DOMAINS_FILE)) {
         errorLog('讀取 domains.json 失敗:', err.message);
         domains = [];
     }
-} 
+}
 else {
     fs.writeFileSync(DOMAINS_FILE, JSON.stringify(domains, null, 2));
 }
@@ -86,7 +85,8 @@ const getZoneID = async (zone) => {
         if (data.success && data.result.length) return data.result[0].id;
         errorLog(`找不到 Zone ID for zone: ${zone}`);
         return null;
-    } catch (error) {
+    } 
+    catch (error) {
         errorLog(`獲取 Zone ID 失敗 for zone ${zone}:`, error.message);
         return null;
     }
@@ -104,7 +104,8 @@ const getDNSRecordID = async (zoneID, recordName) => {
         if (data.success && data.result.length) return data.result[0].id;
         errorLog(`找不到 DNS Record ID for ${recordName} in zone ${zoneID}`);
         return null;
-    } catch (error) {
+    } 
+    catch (error) {
         errorLog(`獲取 DNS Record ID 失敗 for ${recordName}:`, error.message);
         return null;
     }
@@ -116,7 +117,7 @@ const updateDNSRecord = async (zoneID, recordID, recordName, ip) => {
             type: 'A',
             name: recordName,
             content: ip,
-            ttl: 1,
+            ttl: 1, 
             proxied: false
         }, {
             headers: {
@@ -127,7 +128,7 @@ const updateDNSRecord = async (zoneID, recordID, recordName, ip) => {
 
         if (data.success) {
             log(`成功更新 ${recordName} 至 IP: ${ip}`);
-        } 
+        }
         else {
             errorLog(`更新 ${recordName} 失敗:`, data.errors);
         }
@@ -143,11 +144,11 @@ const updateDNS = async () => {
 
     const lastIP = getLastIP();
     if (currentIP === lastIP) {
-        log(`IP 未更變 (${currentIP})，跳過更新。`);
+        log(`IP 未變更 (${currentIP})，跳過更新。`);
         return;
     }
 
-    log(`IP 更變: ${lastIP} -> ${currentIP}`);
+    log(`IP 變更: ${lastIP || 'null'} -> ${currentIP}`);
 
     for (const { zone, record } of domains) {
         const zoneID = await getZoneID(zone);
@@ -163,20 +164,20 @@ const updateDNS = async () => {
 };
 
 setInterval(updateDNS, CHECK_INTERVAL * 1000);
-updateDNS(); 
+updateDNS();
 
 app.post('/domains', (req, res) => {
     const { zone, record } = req.body;
     if (!zone || !record) return res.status(400).json({ message: 'zone 和 record 是必填項。' });
 
     if (domains.some(d => d.zone === zone && d.record === record)) {
-        return res.status(400).json({ message: '該domain已存在。' });
+        return res.status(400).json({ message: '該網域已存在。' });
     }
 
     domains.push({ zone, record });
     saveDomains();
-    log(`新增domain: zone=${zone}, record=${record}`);
-    res.status(201).json({ message: 'domain已新增。', domains });
+    log(`新增網域: zone=${zone}, record=${record}`);
+    res.status(201).json({ message: '網域已新增。', domains });
 });
 
 app.delete('/domains', (req, res) => {
@@ -187,14 +188,13 @@ app.delete('/domains', (req, res) => {
     domains = domains.filter(d => !(d.zone === zone && d.record === record));
 
     if (domains.length === initialLength) {
-        return res.status(404).json({ message: '找不到該domain。' });
+        return res.status(404).json({ message: '找不到該網域。' });
     }
 
     saveDomains();
-    log(`移除domain: zone=${zone}, record=${record}`);
-    res.status(200).json({ message: 'domain已移除。', domains });
+    log(`移除網域: zone=${zone}, record=${record}`);
+    res.status(200).json({ message: '網域已移除。', domains });
 });
 
 app.get('/domains', (req, res) => res.status(200).json(domains));
-
-app.listen(PORT, () => log(`Dynamic DNS 服務正在運行，API 伺服器在port ${PORT}`));
+app.listen(PORT, ADDR, () => log(`Dynamic DNS 服務正在運行，API 伺服器綁定在 ${ADDR}:${PORT}`));
