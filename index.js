@@ -7,7 +7,7 @@ const fs = require('fs');
 const app = express();
 app.use(bodyParser.json());
 
-const { CLOUDFLARE_API_TOKEN, CHECK_INTERVAL = 300, PORT = 3000, ADDR = '0.0.0.0' } = process.env;
+const { CLOUDFLARE_API_TOKEN, CHECK_INTERVAL = 300, PORT = 3000, ADDR = '0.0.0.0', API_KEY } = process.env;
 const DOMAINS_FILE = 'domains.json';
 const IP_FILE = 'last_ip.txt';
 
@@ -28,6 +28,18 @@ const log = (...args) => {
 const errorLog = (...args) => {
     console.error(`[${getTimestamp()}]`, ...args);
 };
+
+const authenticate = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey && apiKey === API_KEY) {
+        next();
+    }
+    else {
+        res.status(401).json({ message: '未授權的請求。' });
+    }
+};
+
+app.use(authenticate);
 
 let domains = [];
 if (fs.existsSync(DOMAINS_FILE)) {
@@ -192,19 +204,50 @@ const updateDNS = async () => {
 };
 
 setInterval(updateDNS, CHECK_INTERVAL * 1000);
-updateDNS();
-app.post('/domains', (req, res) => {
+updateDNS(); 
+
+app.post('/domains', async (req, res) => {
     const { zone, record } = req.body;
     if (!zone || !record) return res.status(400).json({ message: 'zone 和 record 是必填項。' });
 
     if (domains.some(d => d.zone === zone && d.record === record)) {
-        return res.status(400).json({ message: '該網域已存在。' });
+        return res.status(400).json({ message: '該domain已存在。' });
     }
 
     domains.push({ zone, record });
     saveDomains();
-    log(`新增網域: zone=${zone}, record=${record}`);
-    res.status(201).json({ message: '網域已新增。', domains });
+    log(`新增domain: zone=${zone}, record=${record}`);
+
+    try {
+        const currentIP = await getPublicIP();
+        if (!currentIP) {
+            return res.status(500).json({ message: '無法獲取公共 IP。' });
+        }
+
+        const zoneID = await getZoneID(zone);
+        if (!zoneID) {
+            return res.status(400).json({ message: `找不到 Zone ID for zone: ${zone}` });
+        }
+
+        let recordID = await getDNSRecordID(zoneID, record);
+        if (recordID) {
+            await updateDNSRecord(zoneID, recordID, record, currentIP);
+        }
+        else {
+            await createDNSRecord(zoneID, record, currentIP);
+        }
+
+        const lastIP = getLastIP();
+        if (currentIP !== lastIP) {
+            saveLastIP(currentIP);
+        }
+
+        res.status(201).json({ message: 'domain已新增並即時更新 DNS 記錄。', domains });
+    }
+    catch (error) {
+        errorLog('新增domain時發生錯誤:', error.message);
+        res.status(500).json({ message: '新增domain時發生錯誤。' });
+    }
 });
 
 app.delete('/domains', (req, res) => {
@@ -215,14 +258,13 @@ app.delete('/domains', (req, res) => {
     domains = domains.filter(d => !(d.zone === zone && d.record === record));
 
     if (domains.length === initialLength) {
-        return res.status(404).json({ message: '找不到該網域。' });
+        return res.status(404).json({ message: '找不到該domain。' });
     }
 
     saveDomains();
-    log(`移除網域: zone=${zone}, record=${record}`);
-    res.status(200).json({ message: '網域已移除。', domains });
+    log(`移除domain: zone=${zone}, record=${record}`);
+    res.status(200).json({ message: 'domain已移除。', domains });
 });
 
 app.get('/domains', (req, res) => res.status(200).json(domains));
-
 app.listen(PORT, ADDR, () => log(`Dynamic DNS 服務正在運行，API 伺服器綁定在 ${ADDR}:${PORT}`));
